@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plugin xmlns="http://apache.org/cordova/ns/plugins/1.0" id="inappbrowser-mira" version="0.1.0">
+  <name>inappbrowser-mira</name>
+  <description>Dedicated retained WebView and temporary authentication browser</description>
+  <license>MIT</license>
+  <js-module name="MiraInAppBrowser" src="www/MiraInAppBrowser.js">
+    <clobbers target="cordova.plugins.MiraInAppBrowser" />
+  </js-module>
+  <platform name="android">
+    <config-file target="res/xml/config.xml" parent="/*">
+      <feature name="MiraInAppBrowser">
+        <param name="android-package" value="com.mira.inappbrowser.MiraInAppBrowser" />
+      </feature>
+    </config-file>
+    <source-file src="src/android/MiraInAppBrowser.java" target-dir="src/com/mira/inappbrowser" />
+    <framework src="androidx.browser:browser:1.8.0" />
+    <framework src="androidx.webkit:webkit:1.12.1" />
+  </platform>
+  <platform name="ios">
+    <config-file target="config.xml" parent="/*">
+      <feature name="MiraInAppBrowser">
+        <param name="ios-package" value="MiraInAppBrowser" />
+      </feature>
+      <preference name="SwiftVersion" value="5" />
+    </config-file>
+    <source-file src="src/ios/MiraInAppBrowser.swift" />
+    <framework src="WebKit.framework" />
+    <framework src="AuthenticationServices.framework" />
+  </platform>
+</plugin>
