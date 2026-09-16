@@ -1,8 +1,16 @@
-# Validation — 2026-09-15
+# Validation — 2026-09-16
 
-Version: `0.1.0`. Status: staging integration candidate, not a production-validated native release.
+Version: `0.1.1`. Status: staging integration candidate, not a production-validated native release.
 
-## Completed
+## 0.1.1 update
+
+- Added opt-in exact HTTPS navigation origins for access-gateway redirects on Android and iOS. Bridge source/origin/path checks and handoff destination checks remain restricted to the original Web App.
+- Added origin-only blocked-navigation diagnostics and native error domain/code or main-document HTTP status. Last failure survives `idle` until the next attempt; sensitive native descriptions and full URLs are excluded.
+- All 17 JavaScript tests and syntax checks passed. New cases cover navigation-origin input rejection, unchanged authentication-origin restriction, sanitized errors and retained/reset diagnostic state.
+- Static OutSystems package validation passed. The updated plugin was removed/reinstalled on both platforms in the existing Android 14.0.1 / iOS 7.1.1 coexistence project, and Cordova prepare passed. Both distinct services remain registered.
+- Native compilation and device execution of this update were not performed. Test the actual gateway chain and bootstrap callback in new MABS-generated binaries. The navigation change addresses a blocked redirect; it does not establish the underlying cause of every iOS load error.
+
+## Original 0.1.0 baseline
 
 | Check | Result |
 | --- | --- |

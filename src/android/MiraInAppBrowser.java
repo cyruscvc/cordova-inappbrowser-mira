@@ -11,6 +11,7 @@ import android.view.WindowManager;
 import android.webkit.CookieManager;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -20,6 +21,8 @@ import androidx.browser.customtabs.CustomTabsIntent;
 import androidx.webkit.WebViewCompat;
 import androidx.webkit.WebViewFeature;
 import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
 import org.apache.cordova.CallbackContext;
 import org.apache.cordova.CordovaPlugin;
 import org.apache.cordova.PluginResult;
@@ -36,6 +39,7 @@ public final class MiraInAppBrowser extends CordovaPlugin {
     private Uri authStart;
     private String origin;
     private boolean delivered;
+    private Set<String> navigationOrigins = Collections.emptySet();
 
     @Override public boolean execute(String action, JSONArray args, CallbackContext callback) {
         if (!action.equals("open") && !action.equals("openAuth") && !action.equals("deliverHandoff") && !action.equals("close")) return false;
@@ -77,6 +81,20 @@ public final class MiraInAppBrowser extends CordovaPlugin {
         return "https://" + value.getHost().toLowerCase(java.util.Locale.ROOT) + ((port == -1 || port == 443) ? "" : ":" + port);
     }
     private boolean trusted(Uri value) { return value != null && origin != null && origin.equals(origin(value)); }
+    private boolean navigationAllowed(Uri value) { return trusted(value) || navigationOrigins.contains(origin(value)); }
+    private JSONObject navigationBlocked(Uri value) {
+        JSONObject result = event("navigation.blocked");
+        try { result.put("origin", origin(value)); } catch (JSONException ignored) { }
+        return result;
+    }
+    private JSONObject loadError(int code, boolean http) {
+        JSONObject result = event("load.error");
+        try {
+            if (http) result.put("httpStatus", code);
+            else { result.put("nativeErrorDomain", "AndroidWebView"); result.put("nativeErrorCode", code); }
+        } catch (JSONException ignored) { }
+        return result;
+    }
     private boolean bootstrapPage(Uri value) {
         return trusted(value) && bootstrap != null && bootstrap.getEncodedPath().equals(value.getEncodedPath());
     }
@@ -91,6 +109,21 @@ public final class MiraInAppBrowser extends CordovaPlugin {
         authStart = Uri.parse(options.getString("authStartUrl"));
         origin = origin(bootstrap);
         if (origin.isEmpty() || !trusted(authStart)) { callback.error(error("INVALID_OPTIONS", "Expected matching HTTPS origins.")); return; }
+        Set<String> allowed = new HashSet<>();
+        JSONArray entries = options.optJSONArray("allowedNavigationOrigins");
+        if ((options.has("allowedNavigationOrigins") && entries == null) || (entries != null && entries.length() > 8)) {
+            callback.error(error("INVALID_OPTIONS", "Expected exact HTTPS navigation origins.")); return;
+        }
+        for (int i = 0; entries != null && i < entries.length(); i++) {
+            String raw = entries.getString(i);
+            Uri entry = Uri.parse(raw);
+            String normalized = origin(entry);
+            if (normalized.isEmpty() || raw.contains("*") || !(raw.equals(normalized) || raw.equals(normalized + "/"))) {
+                callback.error(error("INVALID_OPTIONS", "Expected exact HTTPS navigation origins.")); return;
+            }
+            allowed.add(normalized);
+        }
+        navigationOrigins = allowed;
         events = callback;
         delivered = false;
         WebView owned = new WebView(cordova.getActivity());
@@ -130,12 +163,15 @@ public final class MiraInAppBrowser extends CordovaPlugin {
         owned.setWebViewClient(new WebViewClient() {
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 if (!request.isForMainFrame()) return false;
-                if (trusted(request.getUrl())) return false;
-                if (view == browser) emit(event("navigation.blocked"), true);
+                if (navigationAllowed(request.getUrl())) return false;
+                if (view == browser) emit(navigationBlocked(request.getUrl()), true);
                 return true;
             }
             @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-                if (view == browser && request.isForMainFrame()) emit(event("load.error"), true);
+                if (view == browser && request.isForMainFrame()) emit(loadError(error.getErrorCode(), false), true);
+            }
+            @Override public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse response) {
+                if (view == browser && request.isForMainFrame()) emit(loadError(response.getStatusCode(), true), true);
             }
             @Override public boolean onRenderProcessGone(WebView view, android.webkit.RenderProcessGoneDetail detail) {
                 if (view == browser) { emit(event("load.error"), true); closeOwned(false); }

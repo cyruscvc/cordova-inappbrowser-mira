@@ -4,7 +4,7 @@ Dedicated Cordova plugin for an OutSystems 11 mobile app that opens an external 
 
 Repository: [cyruscvc/cordova-inappbrowser-mira](https://github.com/cyruscvc/cordova-inappbrowser-mira). Package ID: `inappbrowser-mira`.
 
-**Version 0.1.0 is a staging integration candidate. Native compilation, signing and physical-device validation are required before deployment.** See `VALIDATION.md` for the checks actually performed.
+**Version 0.1.1 is a staging integration candidate. Native compilation, signing and physical-device validation are required before deployment.** See `VALIDATION.md` for the checks actually performed.
 
 ## Isolation
 
@@ -18,7 +18,7 @@ Repository: [cyruscvc/cordova-inappbrowser-mira](https://github.com/cyruscvc/cor
 
 The new implementation does not bundle the original Android AAR or Swift library, does not call the original plugin, and does not clear global cookies/storage. It registers no global deep-link interception and no new app URL scheme. AndroidX dependencies are resolved by the host Gradle project; final coexistence needs a device build.
 
-It provides a dedicated authentication browser, not a drop-in replacement for all original browsing APIs. Mixed-file upload customizations, downloads/exports, Teams deep links and cross-origin navigation are not implemented in this first version. Keep existing features wired to the original plugin. This browser currently permits only same-origin top-level Web App navigation, and displays a native Close control without URL/browser toolbars.
+It provides a dedicated authentication browser, not a drop-in replacement for all original browsing APIs. Mixed-file upload customizations, downloads/exports and Teams deep links are not implemented in this version. Keep existing features wired to the original plugin. Top-level navigation permits the Web App origin plus explicitly configured HTTPS access-gateway origins. The native Close control has no URL/browser toolbars.
 
 ## Flow
 
@@ -41,7 +41,8 @@ browser.open({
   authStartUrl: 'https://web.example.test/azure-sso',
   callbackUrl: 'com.example.mobile://MobileModule/HandoffCallback',
   platform: cordova.platformId, // "android" or "ios"
-  timeoutSeconds: 600
+  timeoutSeconds: 600,
+  allowedNavigationOrigins: [] // Optional exact HTTPS access-gateway origins; no bridge permission
 }, function onEvent(event) {
   if (event.type === 'ready') browser.authenticate(function () {}, handleError);
   // Other safe events: opened, authStarted, redeeming, authenticated,
@@ -59,10 +60,16 @@ function handleError(error) {
 | `authenticate(success, error)` | Opens system authentication after `ready` |
 | `completeHandoff({code, attempt}, success, error)` | Accepts the OutSystems callback screen inputs; success means delivery, not completed login |
 | `handleCallback(url, success, error)` | Validates the full exact callback route and its two query parameters |
-| `getState()` | Returns phase, pending attempt and deadline; never the code |
+| `getState()` | Returns phase, pending attempt and deadline, plus safe last-error/blocked-origin diagnostics; never the code |
 | `close(success, error)` | Closes this plugin's browser only |
 
 The Cordova module owns the pending state across ordinary OutSystems screen navigation. A full host reload, process termination, or destroyed native WebView loses the attempt and requires a new bootstrap. Do not store the code in persistent Client Variables. Do not call `close` from the launching screen's OnDestroy merely because deep-link navigation opened the callback screen.
+
+## Access gateway redirects and diagnostics (0.1.1)
+
+For an access gateway that redirects the bootstrap through another origin, configure `allowedNavigationOrigins`, for example `['https://access.example.test']`. Replace the example with the exact HTTPS origin observed and approved for the application. Default is empty; at most eight origins are accepted. Paths, queries, credentials and wildcards are rejected. This option changes navigation only on both platforms. The bridge, authentication entry point and handoff delivery still require the original Web App origin, and handoff delivery still requires its exact bootstrap path. Do not add the identity provider merely to move passkey sign-in into the WebView.
+
+`navigationBlocked` includes only the blocked HTTPS origin, also retained as `getState().lastBlockedOrigin`. On terminal errors, `getState().lastError` survives the return to `idle` until the next open attempt or host reload. Load errors include native error domain/code or main-document HTTP status where available. No full failing URL, query, native description or NSError userInfo is exposed. Main-document HTTP errors (400+) terminate the attempt. A blocked navigation does not itself terminate the attempt, but a subsequent native load failure can. These diagnostics identify the next failure; allowing one gateway origin does not prove that the gateway's complete redirect chain or session works on a device.
 
 ## Platform behavior
 

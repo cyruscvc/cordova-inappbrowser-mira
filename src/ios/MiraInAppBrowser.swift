@@ -15,6 +15,7 @@ final class MiraInAppBrowser: CDVPlugin, WKScriptMessageHandler, WKNavigationDel
     private var authSession: ASWebAuthenticationSession?
     private var authID: UUID?
     private var delivered = false
+    private var navigationOrigins = Set<String>()
 
     private func origin(_ url: URL?) -> String? {
         guard let url = url, url.scheme?.lowercased() == "https", let host = url.host?.lowercased(), url.user == nil, url.password == nil else { return nil }
@@ -30,6 +31,15 @@ final class MiraInAppBrowser: CDVPlugin, WKScriptMessageHandler, WKNavigationDel
         return base == other
     }
     private func bootstrapPage(_ url: URL?) -> Bool { trusted(url) && path(url) == path(bootstrap) }
+    private func navigationAllowed(_ url: URL?) -> Bool {
+        guard let value = origin(url) else { return false }
+        return trusted(url) || navigationOrigins.contains(value)
+    }
+    private func loadError(_ error: Error) {
+        let native = error as NSError
+        // NSError.userInfo and localizedDescription can contain sensitive URLs.
+        emit(["type": "load.error", "nativeErrorDomain": native.domain, "nativeErrorCode": native.code])
+    }
     private func success(_ command: CDVInvokedUrlCommand) {
         commandDelegate.send(CDVPluginResult(status: .ok), callbackId: command.callbackId)
     }
@@ -60,6 +70,19 @@ final class MiraInAppBrowser: CDVPlugin, WKScriptMessageHandler, WKNavigationDel
             guard self.viewController.presentedViewController == nil else {
                 self.error(command, "PRESENTATION_BUSY", "Close other presented views before opening the handoff browser."); return
             }
+            let rawNavigation = opts["allowedNavigationOrigins"] ?? [String]()
+            guard let entries = rawNavigation as? [String], entries.count <= 8 else {
+                self.error(command, "INVALID_OPTIONS", "Expected exact HTTPS navigation origins."); return
+            }
+            var allowed = Set<String>()
+            for raw in entries {
+                guard let entry = URL(string: raw), let normalized = self.origin(entry), !raw.contains("*"),
+                      raw == normalized || raw == normalized + "/" else {
+                    self.error(command, "INVALID_OPTIONS", "Expected exact HTTPS navigation origins."); return
+                }
+                allowed.insert(normalized)
+            }
+            self.navigationOrigins = allowed
             self.bootstrap = bootstrap; self.authStart = auth; self.callbackURL = callback
             self.events = command.callbackId; self.delivered = false
             let config = WKWebViewConfiguration()
@@ -167,14 +190,26 @@ final class MiraInAppBrowser: CDVPlugin, WKScriptMessageHandler, WKNavigationDel
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         if navigationAction.targetFrame?.isMainFrame == false { decisionHandler(.allow); return }
-        if trusted(navigationAction.request.url) { decisionHandler(.allow) }
-        else { if webView === browser { emit(["type": "navigation.blocked"]) }; decisionHandler(.cancel) }
+        if navigationAllowed(navigationAction.request.url) { decisionHandler(.allow) }
+        else {
+            if webView === browser { emit(["type": "navigation.blocked", "origin": origin(navigationAction.request.url) ?? ""]) }
+            decisionHandler(.cancel)
+        }
+    }
+    func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse, decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+        if webView === browser, navigationResponse.isForMainFrame,
+           let response = navigationResponse.response as? HTTPURLResponse, response.statusCode >= 400 {
+            emit(["type": "load.error", "httpStatus": response.statusCode])
+            decisionHandler(.cancel)
+        } else { decisionHandler(.allow) }
     }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        if webView === browser && (error as NSError).code != NSURLErrorCancelled { emit(["type": "load.error"]) }
+        let native = error as NSError
+        if webView === browser && !(native.domain == NSURLErrorDomain && native.code == NSURLErrorCancelled) { loadError(error) }
     }
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        if webView === browser && (error as NSError).code != NSURLErrorCancelled { emit(["type": "load.error"]) }
+        let native = error as NSError
+        if webView === browser && !(native.domain == NSURLErrorDomain && native.code == NSURLErrorCancelled) { loadError(error) }
     }
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         if webView === browser { emit(["type": "load.error"]); closeOwned(notify: false) }

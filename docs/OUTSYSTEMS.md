@@ -65,7 +65,8 @@ p.open({
   authStartUrl: $parameters.AuthStartUrl,
   callbackUrl: $parameters.CallbackUrl,
   platform: cordova.platformId,
-  timeoutSeconds: 600
+  timeoutSeconds: 600,
+  allowedNavigationOrigins: [] // Add only exact HTTPS origins required by your access gateway
 }, function (event) {
   window.miraHandoffStatus = event;
   if (event.type === 'opened') settle(true, '');
@@ -81,6 +82,8 @@ p.open({
 ```
 
 Post-open errors do not reject the already-resolved action. Read `GetHandoffState` / `window.miraHandoffStatus` on the underlying screen's return and display Retry/Close as appropriate. Do not retain `$actions` references to a destroyed screen in a persistent callback.
+
+Version 0.1.1 adds `allowedNavigationOrigins` to the `open` options. For example, use `['https://access.example.test']` after replacing that example with the actual approved gateway origin. Do not change BootstrapUrl to a temporary gateway URL. Navigation permission does not grant access to the handoff bridge. Regenerate and install native builds after changing the plugin version; changing this JavaScript alone cannot update the native navigation policy.
 
 ## CompleteHandoff
 
@@ -137,6 +140,8 @@ Output: `StateJson` (Text). Synchronous JavaScript:
 var p = window.cordova && cordova.plugins && cordova.plugins.MiraInAppBrowser;
 $parameters.StateJson = JSON.stringify(p ? p.getState() : { phase: 'unavailable' });
 ```
+
+In 0.1.1 this also returns `lastBlockedOrigin` and `lastError` when present. `lastError` retains safe load metadata after automatic closure: `code`, `message`, and where available `nativeErrorDomain`, `nativeErrorCode` or `httpStatus`. Log this state through your existing Server Action/System.LogMessage on both the opening success and failure branches. No handoff code, cookies, full callback URL or native error description should be logged. Read the state before starting a new attempt because `open` resets diagnostics. A host reload also resets them.
 
 ## CloseHandoffBrowser
 

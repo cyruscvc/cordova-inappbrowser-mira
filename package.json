@@ -1,6 +1,6 @@
 {
   "name": "inappbrowser-mira",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Isolated OutSystems mobile WebView with temporary-browser authentication handoff",
   "license": "MIT",
   "cordova": { "id": "inappbrowser-mira", "platforms": ["android", "ios"] },

@@ -101,3 +101,51 @@ test('already-authenticated bootstrap bypasses browser; malformed ready is ignor
   h.event({ type: 'session.ready' }); assert.equal(h.api.getState().phase, 'authenticated');
   assert.equal(h.calls.filter(c => c.action === 'openAuth').length, 0);
 });
+test('navigation allowlist defaults to empty and normalizes only exact HTTPS origins', () => {
+  const h = harness(); h.open();
+  assert.equal(h.calls[0].args[0].allowedNavigationOrigins.length, 0);
+  const extra = harness(); extra.open({ allowedNavigationOrigins: ['https://access.example.test:443/', 'https://access.example.test'] });
+  assert.deepEqual(Array.from(extra.calls[0].args[0].allowedNavigationOrigins), ['https://access.example.test']);
+  for (const value of [null, 'https://access.example.test', ['http://access.example.test'], ['https://*.example.test'],
+    ['https://access.example.test/path'], ['https://access.example.test/?code=secret'], ['https://access.example.test/#secret'],
+    ['https://user:secret@access.example.test'], Array(9).fill('https://access.example.test')]) {
+    const invalid = harness(); invalid.open({ allowedNavigationOrigins: value });
+    assert.equal(invalid.errors[0].code, 'INVALID_OPTIONS'); assert.equal(invalid.calls.length, 0);
+  }
+});
+test('navigation permission does not allow a cross-origin authentication entry point', () => {
+  const h = harness();
+  h.open({ allowedNavigationOrigins: ['https://access.example.test'], authStartUrl: 'https://access.example.test/login' });
+  assert.equal(h.errors[0].code, 'INVALID_OPTIONS'); assert.equal(h.calls.length, 0);
+});
+test('blocked navigation records origin only and preserves the pending attempt', () => {
+  const h = harness(); h.open();
+  h.event({ type: 'navigation.blocked', origin: 'https://access.example.test/path?code=secret#fragment', url: 'secret' });
+  assert.equal(h.api.getState().phase, 'bootstrapping');
+  assert.equal(h.api.getState().lastBlockedOrigin, 'https://access.example.test');
+  assert.equal(JSON.stringify(h.events).includes('secret'), false);
+  h.event({ type: 'navigation.blocked', origin: 'javascript:secret' });
+  assert.equal(h.api.getState().lastBlockedOrigin, null);
+});
+test('terminal load errors survive idle with safe native metadata and clear on a new attempt', () => {
+  const h = harness('ios'); h.open();
+  h.event({ type: 'navigation.blocked', origin: 'https://access.example.test' });
+  h.event({ type: 'load.error', nativeErrorDomain: 'NSURLErrorDomain', nativeErrorCode: -1200,
+    url: 'https://web.example.test/?code=secret', localizedDescription: 'secret', userInfo: { code: 'secret' } });
+  const state = h.api.getState();
+  assert.equal(state.phase, 'idle'); assert.equal(state.lastError.code, 'PAGE_LOAD_FAILED');
+  assert.equal(state.lastError.nativeErrorCode, -1200); assert.equal(state.lastError.nativeErrorDomain, 'NSURLErrorDomain');
+  assert.equal(state.lastBlockedOrigin, 'https://access.example.test');
+  assert.equal(JSON.stringify(state).includes('secret'), false);
+  assert.equal(JSON.stringify(h.errors).includes('secret'), false);
+  state.lastError.nativeErrorCode = 123;
+  assert.equal(h.api.getState().lastError.nativeErrorCode, -1200);
+  h.open(); assert.equal(h.api.getState().lastError, undefined); assert.equal(h.api.getState().lastBlockedOrigin, undefined);
+});
+test('load diagnostics discard invalid metadata and preserve HTTP status', () => {
+  const h = harness(); h.open();
+  h.event({ type: 'load.error', nativeErrorDomain: 'https://bad.test/?token=secret', nativeErrorCode: 'secret', httpStatus: 403 });
+  assert.equal(h.api.getState().lastError.httpStatus, 403);
+  assert.equal(h.api.getState().lastError.nativeErrorDomain, undefined);
+  assert.equal(h.api.getState().lastError.nativeErrorCode, undefined);
+});

@@ -5,6 +5,7 @@ var exec = require('cordova/exec');
 var active = null;
 var serial = 0;
 var SERVICE = 'MiraInAppBrowser';
+var diagnostics = {};
 function issue(code, message) { return { code: code, message: message }; }
 function fail(cb, e) { if (typeof cb === 'function') cb(e); }
 function attemptValid(value) { return typeof value === 'string' && /^[A-Za-z0-9_-]{1,256}$/.test(value); }
@@ -29,11 +30,31 @@ function options(input) {
   if (platform !== 'ios' && platform !== 'android') throw issue('INVALID_OPTIONS', 'platform must be ios or android.');
   var seconds = input.timeoutSeconds === undefined ? 600 : input.timeoutSeconds;
   if (!Number.isInteger(seconds) || seconds < 30 || seconds > 600) throw issue('INVALID_OPTIONS', 'timeoutSeconds must be 30–600.');
-  return { bootstrapUrl: b.href, authStartUrl: a.href, callbackUrl: c.href, platform: platform, timeoutSeconds: seconds };
+  var navigation = input.allowedNavigationOrigins === undefined ? [] : input.allowedNavigationOrigins;
+  if (!Array.isArray(navigation) || navigation.length > 8)
+    throw issue('INVALID_OPTIONS', 'allowedNavigationOrigins must be an array of at most 8 exact HTTPS origins.');
+  navigation = navigation.map(function (value) {
+    var n = url(value, 'allowedNavigationOrigins');
+    if (typeof value !== 'string' || n.protocol !== 'https:' || n.pathname !== '/' || n.search || n.host.indexOf('*') !== -1)
+      throw issue('INVALID_OPTIONS', 'Navigation entries must be exact HTTPS origins without paths, queries or wildcards.');
+    return n.origin;
+  });
+  return { bootstrapUrl: b.href, authStartUrl: a.href, callbackUrl: c.href, platform: platform,
+    timeoutSeconds: seconds, allowedNavigationOrigins: Array.from(new Set(navigation)) };
+}
+// Retain only safe metadata, never failing URLs, descriptions or native userInfo.
+function nativeDetails(event) {
+  var value = {};
+  if (typeof event.nativeErrorDomain === 'string' && /^[A-Za-z0-9_.-]{1,80}$/.test(event.nativeErrorDomain))
+    value.nativeErrorDomain = event.nativeErrorDomain;
+  if (Number.isInteger(event.nativeErrorCode)) value.nativeErrorCode = event.nativeErrorCode;
+  if (Number.isInteger(event.httpStatus)) value.httpStatus = event.httpStatus;
+  return value;
 }
 function emit(s, event) { if (active === s && typeof s.onEvent === 'function') s.onEvent(event); }
 function terminal(s, error) {
   if (active !== s) return;
+  diagnostics.lastError = Object.assign({}, error);
   active = null;
   clearTimeout(s.timer);
   // Native close is scoped to this service only; it never touches OSInAppBrowser.
@@ -78,7 +99,8 @@ module.exports = {
   open: function (input, onEvent, onError) {
     if (active) { fail(onError, issue('BUSY', 'Close the existing handoff browser first.')); return; }
     var config;
-    try { config = options(input || {}); } catch (e) { fail(onError, e); return; }
+    diagnostics = {};
+    try { config = options(input || {}); } catch (e) { diagnostics.lastError = Object.assign({}, e); fail(onError, e); return; }
     var s = { id: ++serial, options: config, phase: 'bootstrapping', attempt: null,
       deadline: Date.now() + config.timeoutSeconds * 1000, onEvent: onEvent, onError: onError };
     active = s;
@@ -108,8 +130,13 @@ module.exports = {
       case 'closed':
         active = null; clearTimeout(s.timer);
         if (s.onEvent) s.onEvent({ type: 'closed' }); break;
-      case 'navigation.blocked': emit(s, { type: 'navigationBlocked' }); break;
-      case 'load.error': terminal(s, issue('PAGE_LOAD_FAILED', 'The Web App could not be loaded.')); break;
+      case 'navigation.blocked':
+        var blocked = null;
+        try { var target = new URL(event.origin); if (target.protocol === 'https:') blocked = target.origin; } catch (_) {}
+        diagnostics.lastBlockedOrigin = blocked;
+        emit(s, { type: 'navigationBlocked', origin: blocked }); break;
+      case 'load.error':
+        terminal(s, Object.assign(issue('PAGE_LOAD_FAILED', 'The Web App could not be loaded.'), nativeDetails(event))); break;
       }
     }, function (e) { terminal(s, issue(e && e.code || 'NATIVE_ERROR', 'The native handoff browser is unavailable or failed.')); }, SERVICE, 'open', [config]);
   },
@@ -130,7 +157,12 @@ module.exports = {
   handleCallback: function (callbackUrl, success, error) { callback(active, callbackUrl, success, error); },
   // For the OutSystems HandoffCallback screen after its normal route handling.
   completeHandoff: function (data, success, error) { receive(active, data, success, error); },
-  getState: function () { return active ? { phase: active.phase, attempt: active.attempt, expiresAt: active.deadline } : { phase: 'idle' }; },
+  getState: function () {
+    var state = active ? { phase: active.phase, attempt: active.attempt, expiresAt: active.deadline } : { phase: 'idle' };
+    if (diagnostics.lastError) state.lastError = Object.assign({}, diagnostics.lastError);
+    if (Object.prototype.hasOwnProperty.call(diagnostics, 'lastBlockedOrigin')) state.lastBlockedOrigin = diagnostics.lastBlockedOrigin;
+    return state;
+  },
   close: function (success, error) {
     var s = active; active = null;
     if (s) clearTimeout(s.timer);
