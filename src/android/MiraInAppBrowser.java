@@ -109,6 +109,10 @@ public final class MiraInAppBrowser extends CordovaPlugin {
         authStart = Uri.parse(options.getString("authStartUrl"));
         origin = origin(bootstrap);
         if (origin.isEmpty() || !trusted(authStart)) { callback.error(error("INVALID_OPTIONS", "Expected matching HTTPS origins.")); return; }
+        Uri initial = options.has("initialUrl") ? Uri.parse(options.getString("initialUrl")) : bootstrap;
+        if (!trusted(initial) || initial.getFragment() != null) {
+            callback.error(error("INVALID_OPTIONS", "Expected a same-origin HTTPS initial URL without a fragment.")); return;
+        }
         Set<String> allowed = new HashSet<>();
         JSONArray entries = options.optJSONArray("allowedNavigationOrigins");
         if ((options.has("allowedNavigationOrigins") && entries == null) || (entries != null && entries.length() > 8)) {
@@ -147,9 +151,11 @@ public final class MiraInAppBrowser extends CordovaPlugin {
                     JSONObject data = new JSONObject(raw);
                     String type = data.optString("type");
                     if (type.equals("bootstrap.ready") || type.equals("handoff.complete") || type.equals("handoff.error") || type.equals("session.ready")) {
-                        // Never forward arbitrary page fields (or credentials) to app events.
+                        // Fixed internal fields only. JS validates the optional sign-in URL;
+                        // it is never included in public app events or diagnostics.
                         JSONObject safe = event(type);
                         if (data.has("attempt")) safe.put("attempt", data.optString("attempt"));
+                        if (type.equals("bootstrap.ready") && data.has("signInUrl")) safe.put("signInUrl", data.get("signInUrl"));
                         emit(safe, true);
                         if (type.equals("handoff.complete") || type.equals("session.ready")) {
                             JSONObject ack = event("handoff.accepted");
@@ -201,7 +207,7 @@ public final class MiraInAppBrowser extends CordovaPlugin {
             window.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
             window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         }
-        owned.loadUrl(bootstrap.toString());
+        owned.loadUrl(initial.toString());
         emit(event("opened"), true);
     }
 

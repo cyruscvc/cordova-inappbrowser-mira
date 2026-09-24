@@ -4,7 +4,7 @@ Dedicated Cordova plugin for an OutSystems 11 mobile app that opens an external 
 
 Repository: [cyruscvc/cordova-inappbrowser-mira](https://github.com/cyruscvc/cordova-inappbrowser-mira). Package ID: `inappbrowser-mira`.
 
-**Version 0.1.1 is a staging integration candidate. Native compilation, signing and physical-device validation are required before deployment.** See `VALIDATION.md` for the checks actually performed.
+**Version 0.1.3 is a staging integration candidate. Native compilation, signing and physical-device validation are required before deployment.** See `VALIDATION.md` for the checks actually performed.
 
 ## Isolation
 
@@ -22,7 +22,19 @@ It provides a dedicated authentication browser, not a drop-in replacement for al
 
 ## Flow
 
-1. `open` creates and retains a native WebView at the configured HTTPS bootstrap URL.
+### Button-triggered chatbot login (0.1.2)
+
+Open MIRA using this plugin's `open`, not the standard `OpenInWebView` action. Set `initialUrl` to the initial SSO URL, `bootstrapUrl` to the chatbot's exact HTTPS URL and `authenticationMode: 'onDemand'`. Version 0.1.3 separates the URL loaded first from the page permitted to exchange handoff messages. The native bridge's message acceptance and handoff delivery remain restricted to the `bootstrapUrl` origin and path; there is no hardcoded `/auth/outsystems/bootstrap` path.
+
+For the staging flow, `initialUrl` is `https://mira.stg.mubadala.ae/azure-sso`, which follows the existing WebView SSO redirects to `/maia-personal-assistant`. The upload button on that chatbot page later triggers the separate system-browser login through `authStartUrl`. Opening the initial page does not itself invoke system-browser authentication. If the initial WebView SSO cannot reach the chatbot because it already requires a passkey or is blocked by the access gateway, that must be resolved separately; this option cannot make passkeys work inside the WebView.
+
+The controller starts in `browsing` with no authentication deadline. Load the web helper on the chatbot, but call `install` only when its upload/OneDrive button creates the cookie-bound attempt. Its `bootstrap.ready` message starts the timeout and emits `ready`; the app's event handler calls `authenticate` as before. The original WebView performs redemption and navigates to the same-origin success destination.
+
+See [the complete chatbot wiring](docs/OUTSYSTEMS.md#openchatbrowser-button-triggered-login-012) and [the web team's button contract](docs/WEB-APP-CONTRACT.md#button-triggered-chatbot-integration-012). One handoff per open is supported; cancellation, expiry, failure or a later need to reauthenticate requires closing and reopening. This release does not add native file uploads/downloads or guarantee that a MIRA session satisfies OneDrive's Microsoft access-token/Conditional Access requirements.
+
+### Original bootstrap-first login (default)
+
+1. `open` creates and retains a native WebView at `initialUrl`, or at `bootstrapUrl` when `initialUrl` is omitted. Any initial redirects must reach the configured handoff page before it sends a ready message.
 2. The Web App sets an independent HttpOnly binding cookie and signals `bootstrap.ready` with the attempt ID.
 3. `authenticate` opens the configured sign-in URL with `attempt` and `platform` parameters. The WebView remains retained.
 4. The Web App runs its own Entra/NextAuth login and returns a one-time handoff code to the app callback.
@@ -38,10 +50,12 @@ There is no passkey implementation inside the WebView. Authentication happens in
 const browser = cordova.plugins.MiraInAppBrowser;
 browser.open({
   bootstrapUrl: 'https://web.example.test/auth/mobile/bootstrap',
+  // initialUrl: 'https://web.example.test/azure-sso', // Optional same-origin entry; defaults to bootstrapUrl
   authStartUrl: 'https://web.example.test/azure-sso',
   callbackUrl: 'com.example.mobile://MobileModule/HandoffCallback',
   platform: cordova.platformId, // "android" or "ios"
   timeoutSeconds: 600,
+  authenticationMode: 'bootstrap', // Default. Use 'onDemand' for a chatbot button.
   allowedNavigationOrigins: [] // Optional exact HTTPS access-gateway origins; no bridge permission
 }, function onEvent(event) {
   if (event.type === 'ready') browser.authenticate(function () {}, handleError);
@@ -64,6 +78,8 @@ function handleError(error) {
 | `close(success, error)` | Closes this plugin's browser only |
 
 The Cordova module owns the pending state across ordinary OutSystems screen navigation. A full host reload, process termination, or destroyed native WebView loses the attempt and requires a new bootstrap. Do not store the code in persistent Client Variables. Do not call `close` from the launching screen's OnDestroy merely because deep-link navigation opened the callback screen.
+
+`getState().phase` is `browsing` and `expiresAt` is `null` while waiting for an on-demand request. The 30–600 second timeout begins on the first valid `bootstrap.ready` message. In default `bootstrap` mode it still begins at `open`. The `opened` event means the native container opened, not that the remote document or its bridge is ready. Call `MiraMobileBootstrap.isAvailable()` in the remote page to check the named bridge.
 
 ## Access gateway redirects and diagnostics (0.1.1)
 

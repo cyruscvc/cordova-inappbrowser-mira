@@ -85,7 +85,44 @@ Post-open errors do not reject the already-resolved action. Read `GetHandoffStat
 
 Version 0.1.1 adds `allowedNavigationOrigins` to the `open` options. For example, use `['https://access.example.test']` after replacing that example with the actual approved gateway origin. Do not change BootstrapUrl to a temporary gateway URL. Navigation permission does not grant access to the handoff bridge. Regenerate and install native builds after changing the plugin version; changing this JavaScript alone cannot update the native navigation policy.
 
-## CompleteHandoff
+## OpenChatBrowser: button-triggered login (0.1.2)
+
+Duplicate `OpenHandoffBrowser` as `OpenChatBrowser` and keep its asynchronous node, outputs, event handler and error handling. Add Text inputs named `InitialUrl` and `ChatUrl` in place of `BootstrapUrl`. In `p.open`, replace the bootstrap option and add the entry URL and mode:
+
+```javascript
+initialUrl: $parameters.InitialUrl,
+bootstrapUrl: $parameters.ChatUrl,
+authenticationMode: 'onDemand',
+```
+
+Keep `authStartUrl`, `callbackUrl`, `platform`, `timeoutSeconds`, `allowedNavigationOrigins`, and the `ready → p.authenticate` handler from the full node above. `ready` is emitted only after the chatbot button posts a valid attempt; `opened` must not call `authenticate`.
+
+Use these inputs for the staging integration:
+
+| Input | Value |
+| --- | --- |
+| InitialUrl | `https://mira.stg.mubadala.ae/azure-sso` (loaded first inside the retained WebView) |
+| ChatUrl | `https://mira.stg.mubadala.ae/maia-personal-assistant` |
+| AuthStartUrl | `https://mira.stg.mubadala.ae/azure-sso` (system-browser login after the upload button requests it) |
+| CallbackUrl | Existing verified platform-specific M App callback route |
+
+Replace the M App action that currently opens this chatbot through standard `OpenInWebView` with `OpenChatBrowser`. Do not open the standard browser first or try to attach this plugin to it. This plugin creates and owns its own WebView.
+
+Version 0.1.3 loads `InitialUrl` first, preserving the original `/azure-sso` entry flow, then follows its permitted redirects into the chatbot. It does not skip SSO by directly loading the chatbot. `initialUrl` must use the same HTTPS origin as `bootstrapUrl`; when omitted it defaults to `bootstrapUrl` for existing integrations. The initial SSO path is not the handoff message path. The button must send its request from `ChatUrl`.
+
+This assumes the initial WebView SSO can reach the chatbot, as in the existing standard OpenInWebView flow. If that initial SSO itself requires passkey authentication, a system-browser login is needed earlier; merely choosing `InitialUrl` does not solve that separate prerequisite. Keep only the approved gateway navigation origins and test actual redirects on both platforms.
+
+The native handlers already use the configured `bootstrapUrl` path. The chatbot must remain on that exact origin/path while requesting authentication and receiving the code. Query parameters such as `?onedrive=1` are allowed. Gateway origins, if configured, permit navigation only; they never receive bridge permission. A changed pathname or full-page reload during the pending attempt requires restarting the flow.
+
+The controller waits in `browsing` without a login timeout until the page posts `bootstrap.ready`. After that, normal expiry, callback validation and redemption checks apply. Only one handoff per opened browser is supported; close/reopen for another authentication attempt. Do not call helper `install({sessionReady:true})` merely because the chatbot itself has a session: it finishes this browser's handoff cycle and does not prove Microsoft file access is available.
+
+**Sign-in URL contract:** the web team can now pass its API-returned `signInUrl` into helper `install`. This preserves their correlated `callbackUrl=/auth/outsystems/handoff?attempt=...` parameter. The plugin requires the exact HTTPS origin/path from `AuthStartUrl`, a single matching attempt, a matching platform if supplied, and all query parameters fixed in `AuthStartUrl` unchanged. It adds `platform` if absent. Without `signInUrl`, the original configured-URL behavior remains. The full URL is never included in public plugin events or diagnostics. Server-side callback allowlists and normal OAuth protections still apply.
+
+Update the wrapper's Git reference to the tested change commit, publish/refresh dependencies and generate/install new MABS packages. Have the web team deploy the updated helper as their `/mira-mobile-bootstrap.js` if that is the existing served filename. The repository helper is `web/mira-handoff.js`.
+
+This plugin remains a dedicated handoff browser: the standard plugin's file upload/download support is not inherited. Test the OneDrive web integration separately after login, including its Microsoft token acquisition and tenant policy. If the chatbot requires general native file selection or downloads, that feature requires a separate implementation in this browser.
+
+## CompleteHandoff (callback action)
 
 Inputs: `Code`, `Attempt` (Text). Outputs: `IsSuccess` (Boolean), `ErrorMessage` (Text).
 

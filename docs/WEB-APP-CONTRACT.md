@@ -1,6 +1,43 @@
 # Web App bridge contract — version 1
 
-This is the proposed contract implemented by plugin v0.1.0. Confirm or adapt the existing bootstrap page before integration. URLs below are examples; no environment endpoints are hardcoded in the plugin.
+This contract is implemented by plugin v0.1.0 and later. Version 0.1.2 adds an opt-in chatbot-first mode without changing native message names. Confirm or adapt the existing page before integration. URLs below are examples; no environment endpoints are hardcoded in the plugin.
+
+## Button-triggered chatbot integration (0.1.2)
+
+The mobile team opens MIRA with this plugin using `initialUrl: 'https://mira.stg.mubadala.ae/azure-sso'` (added in 0.1.3), the chatbot's exact URL as `bootstrapUrl`, and `authenticationMode: 'onDemand'`. The initial WebView SSO redirects must reach the chatbot before its upload button requests the handoff. The native handler is installed before loading the initial page; message acceptance and code delivery still require the configured chatbot origin/path. Standard OutSystems `OpenInWebView` does not provide this plugin's `MiraHandoffNative` handler.
+
+Load the helper on the chatbot but do not call `install` on mount. Before creating an attempt on a button tap, check `window.MiraMobileBootstrap.isAvailable()`. If false, show a recoverable message and do not create an attempt or poll indefinitely. This method checks the named callable interface; it does not prove native acknowledgement, resource authorization, or identify a WebView from its user agent.
+
+On the upload/OneDrive button:
+
+1. Use a single in-flight guard and disable repeated sign-in taps.
+2. Call the existing same-origin attempt-creation API. It must establish the independent HttpOnly binding cookie in this WebView, even if the chatbot already has its own login session. Create attempts at tap time, not page mount.
+3. Call `MiraMobileBootstrap.install` with the returned attempt ID and `signInUrl`, `/api/auth/outsystems-handoff/redeem`, and `/maia-personal-assistant?onedrive=1` as the success URL. Keep required CSRF headers. Leave `sessionReady` false for a new authentication request.
+4. Keep this document mounted until completion. Store and call the returned cleanup function when the component/document is intentionally torn down. Unmounting during a handoff requires restarting, not reusing the old attempt.
+5. After redemption and native acknowledgement, the helper navigates to the success URL. That destination must consume `onedrive=1`, verify Microsoft file access and resume the OneDrive component without starting a login loop. Persist unsent chat state using the application's existing state mechanism before starting the flow; this helper's success navigation reloads the document.
+
+Helper loading alone neither registers a native handler nor starts authentication. `install` still sends `bootstrap.ready`; it now means the button has prepared an attempt. The controller starts its deadline on that message and the app wrapper responds to `ready` with `authenticate`.
+
+The helper exposes `isAvailable()` and cleans up if its first native message throws, allowing a later installation after the bridge is available. A completed, cancelled, expired or failed native handoff still requires closing/reopening for another authentication cycle; this version does not reset native one-time delivery protection.
+
+**Sign-in URL:** pass `signInUrl: response.signInUrl` into `install` to preserve the server-generated continuation parameters. The controller requires the exact configured `AuthStartUrl` origin/path, one matching attempt, a matching platform if supplied, and unchanged configured query parameters. Credentials and fragments are rejected. It adds `platform` when omitted. If `signInUrl` is absent, it constructs the URL from `AuthStartUrl` as before. The full URL is internal and never included in public events or diagnostics. The server must still allowlist the continuation destination; do not use arbitrary redirects.
+
+After the attempt-creation API succeeds, the relevant helper call is:
+
+```javascript
+const cleanup = window.MiraMobileBootstrap.install({
+  attempt: response.attemptId,
+  signInUrl: response.signInUrl,
+  redeemUrl: '/api/auth/outsystems-handoff/redeem',
+  successUrl: '/maia-personal-assistant?onedrive=1',
+  sessionReady: false,
+  onError: message => { /* display the error and offer to reopen from M App */ }
+});
+```
+
+Check `isAvailable()` and set the in-flight guard before calling the attempt API. Retain `cleanup` for component teardown. Add the backend's required CSRF headers to this call as appropriate.
+
+The cookie-binding, code redemption and Microsoft authorization requirements below apply unchanged on the chatbot route.
 
 ## Bootstrap
 
@@ -25,6 +62,8 @@ The helper uses a restricted native channel. It does not depend on Cordova being
 ## Sign-in
 
 Native opens the configured authStartUrl and adds `attempt=<id>&platform=android|ios`. Store the selection server-side against the correlated browser authentication transaction. Use separate allowlisted platform callback values. Do not accept arbitrary client-supplied redirect destinations.
+
+From 0.1.2, `bootstrap.ready` may include the validated API-returned `signInUrl`; the controller uses its correlated continuation parameters as described above. Both native implementations forward this one optional field internally. Keep ready-message JSON within 8192 bytes (including the maximum 4096-character URL). Never include credentials or Microsoft tokens in the URL.
 
 Preserve NextAuth/Entra state, nonce, PKCE and CSRF protections as applicable. Entra's callback remains the Web App HTTPS endpoint. After a validated login and access check, issue a random one-time code bound to the attempt, authenticated identity and independent WebView binding secret. Store only the code hash; suggested code expiry: 60 seconds.
 
