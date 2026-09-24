@@ -30,6 +30,9 @@ function options(input) {
   if (platform !== 'ios' && platform !== 'android') throw issue('INVALID_OPTIONS', 'platform must be ios or android.');
   var seconds = input.timeoutSeconds === undefined ? 600 : input.timeoutSeconds;
   if (!Number.isInteger(seconds) || seconds < 30 || seconds > 600) throw issue('INVALID_OPTIONS', 'timeoutSeconds must be 30–600.');
+  var mode = input.authenticationMode === undefined ? 'bootstrap' : input.authenticationMode;
+  if (mode !== 'bootstrap' && mode !== 'onDemand')
+    throw issue('INVALID_OPTIONS', 'authenticationMode must be bootstrap or onDemand.');
   var navigation = input.allowedNavigationOrigins === undefined ? [] : input.allowedNavigationOrigins;
   if (!Array.isArray(navigation) || navigation.length > 8)
     throw issue('INVALID_OPTIONS', 'allowedNavigationOrigins must be an array of at most 8 exact HTTPS origins.');
@@ -40,7 +43,7 @@ function options(input) {
     return n.origin;
   });
   return { bootstrapUrl: b.href, authStartUrl: a.href, callbackUrl: c.href, platform: platform,
-    timeoutSeconds: seconds, allowedNavigationOrigins: Array.from(new Set(navigation)) };
+    timeoutSeconds: seconds, authenticationMode: mode, allowedNavigationOrigins: Array.from(new Set(navigation)) };
 }
 // Retain only safe metadata, never failing URLs, descriptions or native userInfo.
 function nativeDetails(event) {
@@ -63,7 +66,31 @@ function terminal(s, error) {
 }
 function stillPending(s) {
   if (!s || active !== s) throw issue('NO_PENDING_ATTEMPT', 'Start a new bootstrap attempt.');
-  if (Date.now() >= s.deadline) throw issue('ATTEMPT_EXPIRED', 'Start a new bootstrap attempt.');
+  if (s.deadline !== null && Date.now() >= s.deadline) throw issue('ATTEMPT_EXPIRED', 'Start a new bootstrap attempt.');
+}
+function startDeadline(s) {
+  s.deadline = Date.now() + s.options.timeoutSeconds * 1000;
+  s.timer = setTimeout(function () { terminal(s, issue('ATTEMPT_EXPIRED', 'Sign-in timed out. Start again.')); }, s.options.timeoutSeconds * 1000);
+}
+function signInTarget(s, event) {
+  if (event.signInUrl === undefined) return null;
+  if (typeof event.signInUrl !== 'string' || event.signInUrl.length > 4096)
+    throw issue('INVALID_AUTH_URL', 'Invalid sign-in URL.');
+  var target;
+  try { target = url(event.signInUrl, 'signInUrl'); }
+  catch (_) { throw issue('INVALID_AUTH_URL', 'Invalid sign-in URL.'); }
+  var configured = new URL(s.options.authStartUrl);
+  if (target.origin !== configured.origin || target.pathname !== configured.pathname ||
+      target.searchParams.getAll('attempt').length !== 1 || target.searchParams.get('attempt') !== event.attempt ||
+      target.searchParams.getAll('platform').length > 1 ||
+      (target.searchParams.has('platform') && target.searchParams.get('platform') !== s.options.platform))
+    throw issue('INVALID_AUTH_URL', 'Sign-in URL does not match the configured endpoint and attempt.');
+  // Preserve trusted configuration parameters while allowing the server's correlated continuation.
+  configured.searchParams.forEach(function (_, key) {
+    if (JSON.stringify(configured.searchParams.getAll(key)) !== JSON.stringify(target.searchParams.getAll(key)))
+      throw issue('INVALID_AUTH_URL', 'Sign-in URL changes configured login parameters.');
+  });
+  return target.href;
 }
 function receive(s, data, success, error) {
   try {
@@ -101,16 +128,19 @@ module.exports = {
     var config;
     diagnostics = {};
     try { config = options(input || {}); } catch (e) { diagnostics.lastError = Object.assign({}, e); fail(onError, e); return; }
-    var s = { id: ++serial, options: config, phase: 'bootstrapping', attempt: null,
-      deadline: Date.now() + config.timeoutSeconds * 1000, onEvent: onEvent, onError: onError };
+    var s = { id: ++serial, options: config, phase: config.authenticationMode === 'onDemand' ? 'browsing' : 'bootstrapping', attempt: null,
+      deadline: null, onEvent: onEvent, onError: onError };
     active = s;
-    s.timer = setTimeout(function () { terminal(s, issue('ATTEMPT_EXPIRED', 'Sign-in timed out. Start again.')); }, config.timeoutSeconds * 1000);
+    if (config.authenticationMode === 'bootstrap') startDeadline(s);
     exec(function (event) {
       if (active !== s || !event) return;
       switch (event.type) {
       case 'opened': emit(s, { type: 'opened' }); break;
       case 'bootstrap.ready':
-        if (s.phase !== 'bootstrapping' || !attemptValid(event.attempt)) return;
+        if ((s.phase !== 'bootstrapping' && s.phase !== 'browsing') || !attemptValid(event.attempt)) return;
+        try { s.signInUrl = signInTarget(s, event); }
+        catch (e) { terminal(s, e); return; }
+        if (s.phase === 'browsing') startDeadline(s);
         s.attempt = event.attempt; s.phase = 'ready';
         emit(s, { type: 'ready', attempt: s.attempt }); break;
       case 'auth.callback':
@@ -123,7 +153,7 @@ module.exports = {
         s.phase = 'authenticated'; clearTimeout(s.timer);
         emit(s, { type: 'authenticated', attempt: s.attempt }); s.attempt = null; break;
       case 'session.ready':
-        if (s.phase !== 'bootstrapping') return;
+        if (s.phase !== 'bootstrapping' && s.phase !== 'browsing') return;
         s.phase = 'authenticated'; clearTimeout(s.timer);
         emit(s, { type: 'authenticated', reusedSession: true }); break;
       case 'handoff.error': terminal(s, issue('REDEMPTION_FAILED', 'The Web App could not establish a session. Start again.')); break;
@@ -145,7 +175,7 @@ module.exports = {
     try {
       stillPending(s);
       if (s.phase !== 'ready') throw issue('INVALID_STATE', 'Wait for bootstrap ready.');
-      var target = new URL(s.options.authStartUrl);
+      var target = new URL(s.signInUrl || s.options.authStartUrl);
       target.searchParams.set('attempt', s.attempt);
       target.searchParams.set('platform', s.options.platform);
       s.phase = 'authenticating';

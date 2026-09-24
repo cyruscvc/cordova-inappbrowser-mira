@@ -1,3 +1,19 @@
+# Version 0.1.2 — chatbot button handoff
+
+Changes: opt-in `authenticationMode: 'onDemand'`, a deadline that begins when the button supplies a valid attempt, helper bridge preflight and cleanup after a failed first send or component teardown, and integration instructions for the chatbot route. Default bootstrap-first behavior is retained. Native Android/iOS message handlers now forward the optional signInUrl internally. The controller validates its endpoint, attempt, platform and configured parameters before launch. Origin/path restrictions and native browser ownership are unchanged.
+
+Validation performed for this change:
+
+- `npm test`: 29 tests passed (17 existing, 12 added). Covers idle chatbot beyond the login timeout; Android and iOS controller callback paths; duplicate, unsolicited, mismatched and expired callbacks; legacy deadline behavior; missing bridge; first-send failure; stale component cleanup and in-flight redemption teardown; server-generated continuation preservation and rejection of unsafe/mismatched login URLs.
+- `npm run check`: both JavaScript files passed syntax checks.
+- Plugin source-directory validator: valid with the package root named `inappbrowser-mira`. Existing plugin identity retained for compatibility; GitHub repository name may differ from the package ID.
+
+Not performed: native Android/iOS compilation, MABS generation/signing, or physical-device validation. JavaScript harnesses mock Cordova/native callbacks; they do not prove platform UI behavior, Zscaler access, Microsoft token acquisition or Conditional Access success.
+
+Device integration gates: generate/install the new package; invoke OpenChatBrowser instead of standard OpenInWebView; confirm bridge presence on the exact chatbot route; idle longer than 10 minutes then tap; verify the actual `/azure-sso` continuation contract; finish passkey/callback/redemption; resume OneDrive; check cancellation and reopen, gateway redirects, page reload, backgrounding and duplicate taps on both platforms. Native file upload/download features remain outside this plugin's current scope. One authentication cycle per open is supported.
+
+---
+
 # Validation — 2026-09-16
 
 Version: `0.1.1`. Status: staging integration candidate, not a production-validated native release.

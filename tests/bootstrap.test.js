@@ -13,7 +13,7 @@ function setup(status = 204) {
   const sandbox = { window, URL, AbortController, setTimeout: () => 1, clearTimeout: () => {},
     fetch: async (url, opts) => { requests.push({ url, opts }); return { status }; } };
   vm.runInNewContext(fs.readFileSync('web/mira-handoff.js', 'utf8'), sandbox);
-  return { window, sent, requests, navigations,
+  return { window, sent, requests, navigations, listeners, sandbox,
     install(overrides = {}) { return window.MiraMobileBootstrap.install({ attempt: 'att_123', redeemUrl: '/api/auth/handoff/redeem', successUrl: '/overview', ...overrides }); },
     receive(data) { return listeners.get('mira:native')({ detail: data }); }
   };
@@ -55,4 +55,55 @@ test('server-verified existing session navigates without a redemption request', 
   assert.equal(h.sent[0].type, 'session.ready');
   await h.receive({ type: 'handoff.accepted' });
   assert.equal(h.navigations.length, 1); assert.equal(h.requests.length, 0);
+});
+
+test('loading the helper never starts login; bridge check works for Android and iOS', () => {
+  const h = setup();
+  assert.equal(h.window.MiraMobileBootstrap.isAvailable(), true);
+  assert.equal(h.sent.length, 0);
+  delete h.window.MiraHandoffNative;
+  assert.equal(h.window.MiraMobileBootstrap.isAvailable(), false);
+  assert.throws(() => h.install(), /Native handoff bridge unavailable/);
+  assert.equal(h.listeners.size, 0);
+  h.window.webkit = { messageHandlers: { MiraHandoffNative: { postMessage: raw => h.sent.push(JSON.parse(raw)) } } };
+  assert.equal(h.window.MiraMobileBootstrap.isAvailable(), true);
+  h.install(); assert.equal(h.sent[0].type, 'bootstrap.ready');
+});
+test('first-message failure releases helper state so the user can retry', () => {
+  const h = setup();
+  h.window.MiraHandoffNative.postMessage = () => { throw new Error('bridge disconnected'); };
+  assert.throws(() => h.install(), /bridge disconnected/);
+  assert.equal(h.listeners.size, 0);
+  h.window.MiraHandoffNative.postMessage = raw => h.sent.push(JSON.parse(raw));
+  h.install(); assert.equal(h.sent.length, 1);
+  assert.throws(() => h.install(), /already installed/);
+});
+test('cleanup from an old chat component cannot release a newer installation', () => {
+  const h = setup(); const old = h.install(); old();
+  h.install({ attempt: 'att_new' }); old();
+  assert.throws(() => h.install(), /already installed/);
+  assert.equal(h.listeners.size, 1);
+});
+test('unmounting during redemption suppresses stale completion or error messages', async () => {
+  for (const reject of [false, true]) {
+    const h = setup(); let finish;
+    h.sandbox.fetch = () => new Promise((resolve, fail) => { finish = reject ? () => fail(new Error('aborted')) : () => resolve({ status: 204 }); });
+    const cleanup = h.install();
+    const pending = h.receive({ type: 'auth.handoff', attempt: 'att_123', code: 'opaque' });
+    cleanup(); finish(); await pending;
+    assert.equal(h.sent.length, 1); assert.equal(h.listeners.size, 0); assert.equal(h.navigations.length, 0);
+  }
+});
+
+test('helper forwards the correlated sign-in URL and rejects unsafe URLs before posting', () => {
+  const h = setup();
+  h.install({ signInUrl: '/azure-sso?attempt=att_123&callbackUrl=%2Fauth%2Foutsystems%2Fhandoff%3Fattempt%3Datt_123' });
+  const target = new URL(h.sent[0].signInUrl);
+  assert.equal(target.origin, h.window.location.origin);
+  assert.equal(target.searchParams.get('callbackUrl'), '/auth/outsystems/handoff?attempt=att_123');
+  for (const signInUrl of ['https://evil.test/login?attempt=att_123', '/login?attempt=wrong',
+    '/login?attempt=att_123&attempt=att_123', '/login?attempt=att_123#secret', 'https://user:secret@web.example.test/login?attempt=att_123']) {
+    const bad = setup(); assert.throws(() => bad.install({ signInUrl }), /Invalid sign-in URL/);
+    assert.equal(bad.sent.length, 0); assert.equal(bad.listeners.size, 0);
+  }
 });

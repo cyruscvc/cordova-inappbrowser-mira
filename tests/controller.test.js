@@ -149,3 +149,109 @@ test('load diagnostics discard invalid metadata and preserve HTTP status', () =>
   assert.equal(h.api.getState().lastError.nativeErrorDomain, undefined);
   assert.equal(h.api.getState().lastError.nativeErrorCode, undefined);
 });
+
+test('on-demand chatbot stays open beyond timeout without launching login', () => {
+  const h = harness(); h.open({ authenticationMode: 'onDemand', bootstrapUrl: 'https://web.example.test/maia-personal-assistant' });
+  h.event({ type: 'opened' }); h.advance(3600000);
+  assert.equal(h.api.getState().phase, 'browsing');
+  assert.equal(h.api.getState().expiresAt, null);
+  assert.equal(h.timers.size, 0);
+  assert.equal(h.calls.some(c => c.action === 'openAuth' || c.action === 'close'), false);
+  h.api.authenticate(null, e => h.errors.push(e));
+  assert.equal(h.errors[0].code, 'INVALID_STATE');
+  h.api.completeHandoff({ attempt: 'att_123', code: 'unsolicited' }, null, e => h.errors.push(e));
+  assert.equal(h.errors[1].code, 'INVALID_STATE');
+  assert.equal(h.delivery(), undefined);
+});
+test('button request gets a fresh deadline and retains the chatbot through redemption on both platforms', () => {
+  for (const platform of ['android', 'ios']) {
+    const h = harness(platform); h.open({ authenticationMode: 'onDemand', timeoutSeconds: 60 });
+    h.advance(3600000); h.ready();
+    assert.equal(h.api.getState().expiresAt, 3760000);
+    assert.equal(h.api.getState().phase, 'authenticating');
+    assert.equal(h.timers.size, 1);
+    h.event({ type: 'bootstrap.ready', attempt: 'att_repeated_tap' });
+    assert.equal(h.api.getState().attempt, 'att_123');
+    h.event({ type: 'session.ready' });
+    assert.equal(h.api.getState().phase, 'authenticating');
+    if (platform === 'ios') h.event({ type: 'auth.callback', url: 'com.example.mobile://Mobile/HandoffCallback?code=opaque&attempt=att_123' });
+    else h.api.completeHandoff({ code: 'opaque', attempt: 'att_123' }, null, e => h.errors.push(e));
+    h.delivery().ok(); h.event({ type: 'handoff.complete', attempt: 'att_123' });
+    assert.equal(h.api.getState().phase, 'authenticated');
+    assert.equal(h.timers.size, 0);
+    assert.equal(h.errors.length, 0);
+    assert.equal(h.calls.filter(c => c.action === 'open').length, 1);
+    assert.equal(h.calls.some(c => c.action === 'close'), false);
+    // This version deliberately supports one handoff per open, matching native delivery protection.
+    h.event({ type: 'bootstrap.ready', attempt: 'att_second' });
+    assert.equal(h.api.getState().phase, 'authenticated');
+  }
+});
+test('on-demand ignores malformed requests; login timeout begins only at a valid request', () => {
+  const h = harness(); h.open({ authenticationMode: 'onDemand', timeoutSeconds: 30 });
+  h.event({ type: 'bootstrap.ready', attempt: '../bad' });
+  assert.equal(h.timers.size, 0);
+  h.ready(); h.advance(30001);
+  h.api.completeHandoff({ code: 'opaque', attempt: 'att_123' }, null, e => h.errors.push(e));
+  assert.equal(h.errors[0].code, 'ATTEMPT_EXPIRED');
+  assert.equal(h.delivery(), undefined);
+  Array.from(h.timers.values())[0]();
+  assert.equal(h.api.getState().phase, 'idle');
+  assert.equal(h.calls.filter(c => c.action === 'close').length, 1);
+});
+test('bootstrap retains its opening deadline, and modes must be explicit valid strings', () => {
+  const h = harness(); h.open();
+  assert.equal(h.api.getState().phase, 'bootstrapping');
+  assert.equal(h.timers.size, 1);
+  h.advance(5000); h.event({ type: 'bootstrap.ready', attempt: 'att_123' });
+  assert.equal(h.api.getState().expiresAt, 700000);
+  for (const authenticationMode of ['automatic', '', null, true]) {
+    const bad = harness(); bad.open({ authenticationMode });
+    assert.equal(bad.errors[0].code, 'INVALID_OPTIONS'); assert.equal(bad.calls.length, 0);
+  }
+});
+test('on-demand closes cleanly while browsing and accepts a server-confirmed session at the button', () => {
+  const h = harness(); h.open({ authenticationMode: 'onDemand' });
+  h.api.close(); assert.equal(h.api.getState().phase, 'idle'); assert.equal(h.timers.size, 0);
+  h.open({ authenticationMode: 'onDemand' });
+  h.event({ type: 'session.ready' });
+  assert.equal(h.api.getState().phase, 'authenticated');
+  assert.equal(h.calls.some(c => c.action === 'openAuth'), false);
+});
+
+test('server-generated sign-in continuation is preserved privately for both platforms', () => {
+  for (const platform of ['ios', 'android']) {
+    const h = harness(platform); h.open({ authenticationMode: 'onDemand' });
+    const login = new URL(h.options.authStartUrl);
+    login.searchParams.set('attempt', 'att_123');
+    login.searchParams.set('callbackUrl', '/auth/outsystems/handoff?attempt=att_123');
+    h.event({ type: 'bootstrap.ready', attempt: 'att_123', signInUrl: login.href });
+    h.api.authenticate(null, e => h.errors.push(e));
+    const opened = new URL(h.calls.find(c => c.action === 'openAuth').args[0].url);
+    assert.equal(opened.searchParams.get('callbackUrl'), '/auth/outsystems/handoff?attempt=att_123');
+    assert.equal(opened.searchParams.get('attempt'), 'att_123');
+    assert.equal(opened.searchParams.get('platform'), platform);
+    assert.equal(opened.searchParams.get('mode'), 'mobile');
+    assert.equal(JSON.stringify([h.events, h.api.getState()]).includes('callbackUrl'), false);
+    assert.equal(h.errors.length, 0);
+  }
+});
+test('invalid server sign-in URLs fail closed before system browser launch without leaking their contents', () => {
+  const base = 'https://web.example.test/azure-sso?mode=mobile&attempt=att_123';
+  const bad = [
+    null, 5, '', 'not-a-url', 'https://evil.test/azure-sso?mode=mobile&attempt=att_123',
+    base.replace('/azure-sso?', '/other?'), base.replace('https:', 'http:'),
+    base.replace('att_123', 'att_other'), base + '&attempt=att_123', base.replace('&attempt=att_123', ''),
+    base + '#secret', base.replace('https://', 'https://user:secret@'), base + '&platform=ios',
+    base + '&platform=android&platform=android', base.replace('mode=mobile', 'mode=other'),
+    base.replace('mode=mobile&', ''), base + '&mode=mobile', base + '&extra=' + 'x'.repeat(4096)
+  ];
+  for (const signInUrl of bad) {
+    const h = harness(); h.open({ authenticationMode: 'onDemand' });
+    h.event({ type: 'bootstrap.ready', attempt: 'att_123', signInUrl });
+    assert.equal(h.api.getState().phase, 'idle');
+    assert.equal(h.errors[0].code, 'INVALID_AUTH_URL');
+    assert.equal(h.calls.some(c => c.action === 'openAuth'), false);
+    assert.equal(JSON.stringify([h.errors, h.api.getState()]).includes('secret'), false);
+  }
+});

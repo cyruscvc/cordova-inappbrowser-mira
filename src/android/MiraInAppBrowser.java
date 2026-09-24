@@ -147,9 +147,11 @@ public final class MiraInAppBrowser extends CordovaPlugin {
                     JSONObject data = new JSONObject(raw);
                     String type = data.optString("type");
                     if (type.equals("bootstrap.ready") || type.equals("handoff.complete") || type.equals("handoff.error") || type.equals("session.ready")) {
-                        // Never forward arbitrary page fields (or credentials) to app events.
+                        // Fixed internal fields only. JS validates the optional sign-in URL;
+                        // it is never included in public app events or diagnostics.
                         JSONObject safe = event(type);
                         if (data.has("attempt")) safe.put("attempt", data.optString("attempt"));
+                        if (type.equals("bootstrap.ready") && data.has("signInUrl")) safe.put("signInUrl", data.get("signInUrl"));
                         emit(safe, true);
                         if (type.equals("handoff.complete") || type.equals("session.ready")) {
                             JSONObject ack = event("handoff.accepted");

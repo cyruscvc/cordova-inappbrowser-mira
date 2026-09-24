@@ -152,6 +152,8 @@ final class MiraInAppBrowser: CDVPlugin, WKScriptMessageHandler, WKNavigationDel
               ["bootstrap.ready", "handoff.complete", "handoff.error", "session.ready"].contains(type) else { return }
         var safe: [String: Any] = ["type": type]
         if let attempt = value["attempt"] as? String { safe["attempt"] = attempt }
+        // Internal only: JS validates the URL and excludes it from public events/diagnostics.
+        if type == "bootstrap.ready", let signInURL = value["signInUrl"] { safe["signInUrl"] = signInURL }
         emit(safe)
         if type == "handoff.complete" || type == "session.ready" {
             safe["type"] = "handoff.accepted"
