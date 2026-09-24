@@ -4,7 +4,7 @@ This contract is implemented by plugin v0.1.0 and later. Version 0.1.2 adds an o
 
 ## Button-triggered chatbot integration (0.1.2)
 
-The mobile team opens the chatbot with this plugin, using its exact URL as `bootstrapUrl` and `authenticationMode: 'onDemand'`. The native handler is installed before loading the page. Standard OutSystems `OpenInWebView` does not provide this plugin's `MiraHandoffNative` handler.
+The mobile team opens MIRA with this plugin using `initialUrl: 'https://mira.stg.mubadala.ae/azure-sso'` (added in 0.1.3), the chatbot's exact URL as `bootstrapUrl`, and `authenticationMode: 'onDemand'`. The initial WebView SSO redirects must reach the chatbot before its upload button requests the handoff. The native handler is installed before loading the initial page; message acceptance and code delivery still require the configured chatbot origin/path. Standard OutSystems `OpenInWebView` does not provide this plugin's `MiraHandoffNative` handler.
 
 Load the helper on the chatbot but do not call `install` on mount. Before creating an attempt on a button tap, check `window.MiraMobileBootstrap.isAvailable()`. If false, show a recoverable message and do not create an attempt or poll indefinitely. This method checks the named callable interface; it does not prove native acknowledgement, resource authorization, or identify a WebView from its user agent.
 

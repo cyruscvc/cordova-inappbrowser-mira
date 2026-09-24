@@ -66,6 +66,10 @@ final class MiraInAppBrowser: CDVPlugin, WKScriptMessageHandler, WKNavigationDel
                   let scheme = callback.scheme, scheme != "https", scheme != "http" else {
                 self.error(command, "INVALID_OPTIONS", "Expected HTTPS Web App URLs and an app callback."); return
             }
+            guard let rawInitial = (opts["initialUrl"] ?? b) as? String,
+                  let initial = URL(string: rawInitial), self.origin(initial) == self.origin(bootstrap), initial.fragment == nil else {
+                self.error(command, "INVALID_OPTIONS", "Expected a same-origin HTTPS initial URL without a fragment."); return
+            }
             // Do not dismiss an existing plugin's view controller to make room for ours.
             guard self.viewController.presentedViewController == nil else {
                 self.error(command, "PRESENTATION_BUSY", "Close other presented views before opening the handoff browser."); return
@@ -97,7 +101,7 @@ final class MiraInAppBrowser: CDVPlugin, WKScriptMessageHandler, WKNavigationDel
             self.controller = screen
             self.viewController.present(screen, animated: true) { [weak self, weak web] in
                 guard let self = self, let web = web, self.browser === web else { return }
-                web.load(URLRequest(url: bootstrap))
+                web.load(URLRequest(url: initial))
                 self.emit(["type": "opened"])
             }
         }

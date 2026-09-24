@@ -109,6 +109,10 @@ public final class MiraInAppBrowser extends CordovaPlugin {
         authStart = Uri.parse(options.getString("authStartUrl"));
         origin = origin(bootstrap);
         if (origin.isEmpty() || !trusted(authStart)) { callback.error(error("INVALID_OPTIONS", "Expected matching HTTPS origins.")); return; }
+        Uri initial = options.has("initialUrl") ? Uri.parse(options.getString("initialUrl")) : bootstrap;
+        if (!trusted(initial) || initial.getFragment() != null) {
+            callback.error(error("INVALID_OPTIONS", "Expected a same-origin HTTPS initial URL without a fragment.")); return;
+        }
         Set<String> allowed = new HashSet<>();
         JSONArray entries = options.optJSONArray("allowedNavigationOrigins");
         if ((options.has("allowedNavigationOrigins") && entries == null) || (entries != null && entries.length() > 8)) {
@@ -203,7 +207,7 @@ public final class MiraInAppBrowser extends CordovaPlugin {
             window.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
             window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         }
-        owned.loadUrl(bootstrap.toString());
+        owned.loadUrl(initial.toString());
         emit(event("opened"), true);
     }
 

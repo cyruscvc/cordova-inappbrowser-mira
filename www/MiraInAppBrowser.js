@@ -18,10 +18,13 @@ function url(value, name) {
 }
 function options(input) {
   var b = url(input.bootstrapUrl, 'bootstrapUrl');
+  var initial = input.initialUrl === undefined ? b : url(input.initialUrl, 'initialUrl');
   var a = url(input.authStartUrl, 'authStartUrl');
   var c = url(input.callbackUrl, 'callbackUrl');
   if (b.protocol !== 'https:' || a.origin !== b.origin || a.protocol !== 'https:')
     throw issue('INVALID_OPTIONS', 'Bootstrap and sign-in must use the same HTTPS origin.');
+  if (initial.protocol !== 'https:' || initial.origin !== b.origin)
+    throw issue('INVALID_OPTIONS', 'initialUrl must use the bootstrap HTTPS origin.');
   if (a.searchParams.has('attempt') || a.searchParams.has('platform'))
     throw issue('INVALID_OPTIONS', 'The plugin adds attempt and platform to authStartUrl.');
   if (!/^[a-z][a-z0-9+.-]*:$/.test(c.protocol) || /^(https?|file|javascript|data|intent):$/.test(c.protocol) || !c.hostname || c.search)
@@ -42,7 +45,7 @@ function options(input) {
       throw issue('INVALID_OPTIONS', 'Navigation entries must be exact HTTPS origins without paths, queries or wildcards.');
     return n.origin;
   });
-  return { bootstrapUrl: b.href, authStartUrl: a.href, callbackUrl: c.href, platform: platform,
+  return { bootstrapUrl: b.href, initialUrl: initial.href, authStartUrl: a.href, callbackUrl: c.href, platform: platform,
     timeoutSeconds: seconds, authenticationMode: mode, allowedNavigationOrigins: Array.from(new Set(navigation)) };
 }
 // Retain only safe metadata, never failing URLs, descriptions or native userInfo.

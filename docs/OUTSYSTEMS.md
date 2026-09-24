@@ -87,9 +87,10 @@ Version 0.1.1 adds `allowedNavigationOrigins` to the `open` options. For example
 
 ## OpenChatBrowser: button-triggered login (0.1.2)
 
-Duplicate `OpenHandoffBrowser` as `OpenChatBrowser` and keep its asynchronous node, outputs, event handler and error handling. Add a Text input named `ChatUrl` in place of `BootstrapUrl`. In `p.open`, replace the bootstrap option and add the mode:
+Duplicate `OpenHandoffBrowser` as `OpenChatBrowser` and keep its asynchronous node, outputs, event handler and error handling. Add Text inputs named `InitialUrl` and `ChatUrl` in place of `BootstrapUrl`. In `p.open`, replace the bootstrap option and add the entry URL and mode:
 
 ```javascript
+initialUrl: $parameters.InitialUrl,
 bootstrapUrl: $parameters.ChatUrl,
 authenticationMode: 'onDemand',
 ```
@@ -100,11 +101,16 @@ Use these inputs for the staging integration:
 
 | Input | Value |
 | --- | --- |
+| InitialUrl | `https://mira.stg.mubadala.ae/azure-sso` (loaded first inside the retained WebView) |
 | ChatUrl | `https://mira.stg.mubadala.ae/maia-personal-assistant` |
-| AuthStartUrl | `https://mira.stg.mubadala.ae/azure-sso` (confirm the sign-in contract below) |
+| AuthStartUrl | `https://mira.stg.mubadala.ae/azure-sso` (system-browser login after the upload button requests it) |
 | CallbackUrl | Existing verified platform-specific M App callback route |
 
 Replace the M App action that currently opens this chatbot through standard `OpenInWebView` with `OpenChatBrowser`. Do not open the standard browser first or try to attach this plugin to it. This plugin creates and owns its own WebView.
+
+Version 0.1.3 loads `InitialUrl` first, preserving the original `/azure-sso` entry flow, then follows its permitted redirects into the chatbot. It does not skip SSO by directly loading the chatbot. `initialUrl` must use the same HTTPS origin as `bootstrapUrl`; when omitted it defaults to `bootstrapUrl` for existing integrations. The initial SSO path is not the handoff message path. The button must send its request from `ChatUrl`.
+
+This assumes the initial WebView SSO can reach the chatbot, as in the existing standard OpenInWebView flow. If that initial SSO itself requires passkey authentication, a system-browser login is needed earlier; merely choosing `InitialUrl` does not solve that separate prerequisite. Keep only the approved gateway navigation origins and test actual redirects on both platforms.
 
 The native handlers already use the configured `bootstrapUrl` path. The chatbot must remain on that exact origin/path while requesting authentication and receiving the code. Query parameters such as `?onedrive=1` are allowed. Gateway origins, if configured, permit navigation only; they never receive bridge permission. A changed pathname or full-page reload during the pending attempt requires restarting the flow.
 

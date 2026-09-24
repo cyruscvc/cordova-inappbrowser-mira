@@ -1,3 +1,13 @@
+# Version 0.1.3 — separate initial SSO and chatbot handoff URLs
+
+Added optional same-origin HTTPS `initialUrl` to the controller and both native implementations. The retained WebView loads this URL first; the configured `bootstrapUrl` still determines the exact origin/path allowed to exchange handoff messages. Omitting `initialUrl` preserves existing behavior. Staging configuration starts at `/azure-sso` and receives the later button request at `/maia-personal-assistant`.
+
+Validation: `npm test` passed all 31 tests; `npm run check` passed; plugin source-directory validation passed. The two new tests exercise separate URL forwarding and deferred login for both platform controller paths, default compatibility, and rejection of cross-origin, insecure, credential-bearing or fragmented entry URLs. Native redirects, MABS builds and device behavior have not been tested. The earlier 0.1.2 ZIP does not include this change; build from the updated PR commit.
+
+This does not resolve an initial WebView SSO that itself requires passkeys. One handoff per open and existing upload/download limitations remain.
+
+---
+
 # Version 0.1.2 — chatbot button handoff
 
 Changes: opt-in `authenticationMode: 'onDemand'`, a deadline that begins when the button supplies a valid attempt, helper bridge preflight and cleanup after a failed first send or component teardown, and integration instructions for the chatbot route. Default bootstrap-first behavior is retained. Native Android/iOS message handlers now forward the optional signInUrl internally. The controller validates its endpoint, attempt, platform and configured parameters before launch. Origin/path restrictions and native browser ownership are unchanged.

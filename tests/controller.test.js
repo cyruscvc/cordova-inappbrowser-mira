@@ -255,3 +255,31 @@ test('invalid server sign-in URLs fail closed before system browser launch witho
     assert.equal(JSON.stringify([h.errors, h.api.getState()]).includes('secret'), false);
   }
 });
+
+test('SSO entry URL is separate from the exact chatbot handoff path on both platforms', () => {
+  for (const platform of ['android', 'ios']) {
+    const h = harness(platform);
+    h.open({ authenticationMode: 'onDemand', initialUrl: 'https://web.example.test/azure-sso',
+      bootstrapUrl: 'https://web.example.test/maia-personal-assistant' });
+    const config = h.calls.find(c => c.action === 'open').args[0];
+    assert.equal(config.initialUrl, 'https://web.example.test/azure-sso');
+    assert.equal(config.bootstrapUrl, 'https://web.example.test/maia-personal-assistant');
+    assert.equal(h.api.getState().phase, 'browsing');
+    assert.equal(h.calls.some(c => c.action === 'openAuth'), false);
+    h.event({ type: 'opened' }); h.advance(900000); h.ready();
+    assert.equal(h.api.getState().phase, 'authenticating');
+    assert.equal(h.calls.filter(c => c.action === 'open').length, 1);
+    assert.equal(new URL(h.calls.find(c => c.action === 'openAuth').args[0].url).pathname, '/azure-sso');
+  }
+  const legacy = harness(); legacy.open();
+  assert.equal(legacy.calls[0].args[0].initialUrl, legacy.options.bootstrapUrl);
+});
+test('entry URL cannot use another origin, credentials, fragments or a non-HTTPS scheme', () => {
+  for (const initialUrl of ['https://other.example.test/azure-sso', 'http://web.example.test/azure-sso',
+    'javascript:alert(1)', '/azure-sso', 'https://user:secret@web.example.test/azure-sso',
+    'https://web.example.test/azure-sso#fragment', 'https://web.example.test:444/azure-sso', null]) {
+    const h = harness(); h.open({ initialUrl, allowedNavigationOrigins: ['https://other.example.test'] });
+    assert.equal(h.errors[0].code, 'INVALID_OPTIONS');
+    assert.equal(h.calls.length, 0);
+  }
+});
